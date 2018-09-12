@@ -69,6 +69,7 @@ DataFrame haversine_loop_cpp(DataFrame x, double lat_center, double lon_center, 
   return(NDF);
 }
 
+
 // [[Rcpp::depends(RcppProgress)]]
 #include <progress.hpp>
 #include <progress_bar.hpp>
@@ -90,8 +91,8 @@ DataFrame concentration_loop_cpp(DataFrame sub, DataFrame ref, double radius = 2
   for ( int i = 0; i < n; ++i ) {
     p.increment();
     DataFrame result = haversine_loop_cpp(ref, lat[i], lon[i], radius);
-    IntegerVector id = result["id"];
-    NumericVector value_id = value[id];
+    IntegerVector id1 = result["id"];
+    NumericVector value_id = value[(id1 - 1)]; // vector indices start at 0
     cumulation[i] = sum(value_id);
   }
 
