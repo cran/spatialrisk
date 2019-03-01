@@ -1,6 +1,6 @@
-f33dd36828d0daca9f24dc0686265840 *DESCRIPTION
+b6e90a6f4e910a665d50cf4e892c6b3f *DESCRIPTION
 333fe61afa84e36ab2d5d07aceaa2c38 *NAMESPACE
-57204919e0b04658e2e1bec2ac17274e *NEWS.md
+c5a27d44c878d7312bd3d014b41f2700 *NEWS.md
 33f240741c1a8a29abc9a147d164be8a *R/Groningen.R
 97c4cb5049bf2e23d8c956faa99aa7e4 *R/RcppExports.R
 db930f517e7d4f8009166ae063e757ea *R/concentration.R
@@ -14,7 +14,7 @@ befded6781ccd9ec54ecd1d7cf434d62 *man/Groningen.Rd
 b9d320a2600063e00e8ff5cc70efaa9b *man/haversine.Rd
 7af9d17f7e60f0a1c36e872d862ccf49 *man/points_in_circle.Rd
 c1faf87a883cdf6686501498dbe31eb5 *src/RcppExports.cpp
-98503658bb827a425f244f6e7b3c59e8 *src/haversine_cpp.cpp
+05c4de2dec9271d91ecd5adef1d08f8b *src/haversine_cpp.cpp
 739d545366a3148d9bf8134e97ebf033 *tests/testthat.R
 07cf0b24276c6ec1c9ceaf9f6a4b831a *tests/testthat/test_concentration.R
 4ce48aecbb358aadc5292430aa41cef8 *tests/testthat/test_pointsincircle.R
