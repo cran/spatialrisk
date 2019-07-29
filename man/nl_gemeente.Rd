@@ -8,14 +8,14 @@
 \describe{
   \item{id}{id of gemeente}
   \item{code}{code of gemeente}
-  \item{gemeentena}{name of gemeente}
+  \item{areaname}{name of gemeente}
   \item{geometry}{geometry object of gemeente}
 }}
 \usage{
 nl_gemeente
 }
 \description{
-An object of class sf (simple feature) for gemeentes (English: municipalities) in the Netherlands.
+An object of class sf (simple feature) for gemeentes (English: municipalities) in the Netherlands in the year 2018.
 }
 \author{
 Martin Haringa
