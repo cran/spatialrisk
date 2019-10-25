@@ -1,3 +1,7 @@
+# spatialrisk 0.6.4
+
+* Methods for interpolation and smoothing on the sphere are added. Interpolation is by means of splines or by ordinary kriging. 
+
 # spatialrisk 0.6.3
 
 * Columns with longitude and latitude of centroid of polygon added to data sets.
