@@ -15,16 +15,16 @@
 #' @import dplyr
 #' @importFrom utils capture.output
 #'
-#' @return an object of class sf
+#' @return an object of class \code{sf}
 #'
 #' @author Martin Haringa
 #'
 #' @examples
 #' points_to_polygon(nl_postcode2, insurance, sum(amount, na.rm = TRUE))
 #' \dontrun{
-#' shp_read <- sf::st_read(~/path/to/file.shp)
+#' shp_read <- sf::st_read("~/path/to/file.shp")
 #' points_to_polygon(shp_read, insurance, sum(amount, na.rm = TRUE))
-#'}
+#' }
 points_to_polygon <- function(sf_map, df, oper, crs = 4326, outside_print = FALSE){
 
   oper <- enquo(oper)
@@ -32,13 +32,13 @@ points_to_polygon <- function(sf_map, df, oper, crs = 4326, outside_print = FALS
   shp_wgs84 <- tryCatch(
     {
       sf_map %>%
-        st_transform(crs = crs) %>% # Convert coordinates to WGS84
+        sf::st_transform(crs = crs) %>% # Convert coordinates to WGS84
         dplyr::mutate(id = 1:nrow(sf_map))
     },
     error = function(e) {
       sf_map %>%
         sf::st_buffer(0) %>% # Make invalid geometries valid
-        st_transform(crs = crs) %>%
+        sf::st_transform(crs = crs) %>%
         dplyr::mutate(id = 1:nrow(sf_map))
     })
 

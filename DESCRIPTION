@@ -1,11 +1,15 @@
 Package: spatialrisk
 Type: Package
-Title: Calculating Concentration Risk under Solvency II
-Version: 0.6.6
-Author: Martin Haringa
+Title: Calculating Spatial Risk
+Version: 0.6.7
+Authors@R: c(person("Martin", "Haringa", role = c("aut", "cre"), email = "mtharinga@gmail.com"))
 Maintainer: Martin Haringa <mtharinga@gmail.com>
-Description: Methods for determining spatial risk, in particular calculating the maximum value of insured fire risk policies of all buildings that are partly or fully located within circle of a radius of 200m.
+Description: Methods for spatial risk calculations. It offers an efficient approach to determine the sum of all observations within a 
+    circle of a certain radius. This might be beneficial for insurers who are required (by a recent European Commission regulation) to determine 
+    the maximum value of insured fire risk policies of all buildings that are partly or fully located within a circle of a radius of 200m. 
 License: GPL (>= 2)
+URL: https://github.com/mharinga/spatialrisk,
+        https://mharinga.github.io/spatialrisk/
 LazyData: true
 LinkingTo: Rcpp, RcppProgress
 Imports: automap, classInt, dplyr, fs, ggplot2, gstat, lubridate,
@@ -14,6 +18,7 @@ Depends: R (>= 3.3)
 RoxygenNote: 7.1.0
 Suggests: knitr, rmarkdown, testthat
 NeedsCompilation: yes
-Packaged: 2020-03-20 23:07:52 UTC; haringa
+Packaged: 2020-04-23 12:49:22 UTC; haringa
+Author: Martin Haringa [aut, cre]
 Repository: CRAN
-Date/Publication: 2020-03-21 08:40:02 UTC
+Date/Publication: 2020-04-23 16:10:07 UTC

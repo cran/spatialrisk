@@ -1,6 +1,8 @@
 #' Create choropleth map
 #'
 #' @description Takes an object produced by \code{points_to_polygon()}, and creates the corresponding choropleth map.
+#' The given clustering is according to the Fisher-Jenks algorithm. This commonly used method for choropleths seeks to reduce
+#' the variance within classes and maximize the variance between classes.
 #'
 #' @param sf_object object of class sf
 #' @param value column name to shade the polygons
@@ -27,36 +29,41 @@ choropleth <- function(sf_object, value = "output", id_name = "areaname",
                             mode = "plot", n = 7, legend_title = "Clustering",
                             palette = "viridis"){
 
+  if (!requireNamespace("tmap", quietly = TRUE)) {
+    stop("tmap is needed for this function to work. Install it via install.packages(\"tmap\")", call. = FALSE)
+  }
+
   if (mode == "view"){
     suppressMessages({
-      tmap_mode("view")
+      tmap::tmap_mode("view")
     })
 
-    output <- tm_shape(sf_object) +
-      tm_polygons(value,
-                  id = id_name,
-                  palette = palette,
-                  style = "fisher",
-                  n = n,
-                  title = legend_title,
-                  alpha = .5) +
-      tm_basemap(c("OpenStreetMap", "Esri.WorldGrayCanvas", "Esri.WorldTopoMap"))
+    output <- tmap::tm_shape(sf_object) +
+      tmap::tm_polygons(value,
+                        id = id_name,
+                        palette = palette,
+                        style = "fisher",
+                        n = n,
+                        title = legend_title,
+                        alpha = .5) +
+      tmap::tm_basemap(c("OpenStreetMap", "Esri.WorldGrayCanvas", "Esri.WorldTopoMap"))
   }
 
   else{
     suppressMessages({
-      tmap_mode("plot")
+      tmap::tmap_mode("plot")
     })
-    output <- tm_shape(sf_object) +
-      tm_polygons(value,
-                  id = id_name,
-                  palette = palette,
-                  style = "fisher",
-                  title = legend_title,
-                  n = n,
-                  lwd = .1) +
-      tm_compass(position = c("right", "bottom")) +
-      tm_scale_bar(position = c("left", "bottom"))
+    output <- tmap::tm_shape(sf_object) +
+      tmap::tm_polygons(value,
+                        id = id_name,
+                        palette = palette,
+                        style = "fisher",
+                        title = legend_title,
+                        n = n,
+                        lwd = .1) +
+      tmap::tm_compass(position = c("right", "bottom")) +
+      tmap::tm_scale_bar(position = c("left", "bottom")) +
+      tmap::tm_layout(frame = FALSE)
   }
 
   return(output)
