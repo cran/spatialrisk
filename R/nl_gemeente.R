@@ -48,22 +48,6 @@
 #' }
 "nl_corop"
 
-#' Object of class \code{sf} for 1-digit postcode regions in the Netherlands
-#'
-#' @description An object of class \code{sf} (simple feature) for 1-digit postal codes (Dutch: postcode) regions in the Netherlands.
-#'
-#' @author Martin Haringa
-#'
-#' @details Postal codes in the Netherlands, known as postcodes, are alphanumeric, consisting of four digits followed by two uppercase letters. The first two digits indicate a city and a region, the second two digits and the two letters indicate a range of house numbers, usually on the same street.
-#'
-#' @format A simple feature object with 9 rows and 4 variables:
-#' \describe{
-#'   \item{areaname}{1-digit postal code}
-#'   \item{geometry}{geometry object of postal code}
-#'   \item{lon}{longitude of the 1-digit postal code centroid}
-#'   \item{lat}{latitude of the 1-digit postal code centroid}
-#' }
-"nl_postcode1"
 
 #' Object of class \code{sf} for 2-digit postcode regions in the Netherlands
 #'
@@ -120,25 +104,7 @@
 #' }
 "nl_postcode4"
 
-#' Object of class \code{sf} for countries of the entire world
-#'
-#' @description An object of class \code{sf} (simple feature) for countries of the entire world.
-#'
-#' @author Martin Haringa
-#'
-#' @format A simple feature object with 234 rows and 29 variables.
-"world_countries"
 
-#' Object of class \code{sf} for countries of Europe
-#'
-#' @description An object of class \code{sf} (simple feature) for countries of Europe
-#'
-#' @author Martin Haringa
-#'
-#' @details The epsg (SRID) is set to 102013 (Europe Albers Equal Area Conic).
-#'
-#' @format A simple feature object with 51 rows and 29 variables.
-"europe_countries"
 
 #' KNMI stations
 #'
