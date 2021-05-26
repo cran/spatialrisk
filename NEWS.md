@@ -1,3 +1,8 @@
+# spatialrisk 0.6.9
+
+* `highest_concentration()` now returns correct highest concentration when the circle of the highest concentration overlaps more than one geohash
+* `plot.concentration()` now handles many lon/lat pairs better
+
 # spatialrisk 0.6.8
 
 * `highest_concentration()` is added to do a fast search for the coordinates of the highest concentration

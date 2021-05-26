@@ -11,7 +11,7 @@ highest_concentration(
   lat = lat,
   lowerbound = NULL,
   radius = 200,
-  grid_distance = 20,
+  grid_distance = 25,
   gh_precision = 6,
   display_progress = TRUE
 )
@@ -29,7 +29,7 @@ highest_concentration(
 
 \item{radius}{radius (in meters) (default is 200m)}
 
-\item{grid_distance}{distance (in meters) for precision of concentration risk (default is 20m).
+\item{grid_distance}{distance (in meters) for precision of concentration risk (default is 25m).
 `neighborhood_search()` can be used to search for coordinates with even higher concentrations
 in the neighborhood of the highest concentrations.}
 
@@ -88,8 +88,8 @@ As a last step for each grid point the concentration is calculated.
 }
 \examples{
  \dontrun{
-# Find highest concentration with a precision of a grid of 20 meters
-hc1 <- highest_concentration(Groningen, amount, radius = 200, grid_distance = 20)
+# Find highest concentration with a precision of a grid of 25 meters
+hc1 <- highest_concentration(Groningen, amount, radius = 200, grid_distance = 25)
 
 # Look for coordinates with even higher concentrations in the
 # neighborhood of the coordinates with the highest concentration
