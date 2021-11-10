@@ -1,3 +1,8 @@
+# spatialrisk 0.7.0
+
+* `neighborhood_gh_search()` now returns a more precise outcome when the radius of the circle is not equal to 200m
+* `sf::st_crs()` is used for `sf` objects to not show the message that old crs is detected anymore
+
 # spatialrisk 0.6.9
 
 * `highest_concentration()` now returns correct highest concentration when the circle of the highest concentration overlaps more than one geohash
