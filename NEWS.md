@@ -1,3 +1,7 @@
+# spatialrisk 0.7.1
+
+* `plot_points()` now returns a warning when a specific provider tile is not available
+
 # spatialrisk 0.7.0
 
 * `neighborhood_gh_search()` now returns a more precise outcome when the radius of the circle is not equal to 200m
