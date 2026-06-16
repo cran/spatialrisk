@@ -58,6 +58,14 @@ plot(hotspot)
 head(hotspot$contributing_points[, c("id", "data_row", "lon", "lat", "amount", "amount_sum")])
 
 ## -----------------------------------------------------------------------------
+
+model <- prepare_spatialrisk(portfolio, value = "amount", radius = 200,
+                             cell_size = 100)
+model <- select_candidates(model, progress = FALSE)
+step_hotspot <- optimize_hotspot(model, top_n = 2, progress = FALSE)
+
+
+## -----------------------------------------------------------------------------
 hotspot_continuous <- concentration_hotspot(
   portfolio,
   value = "amount",
