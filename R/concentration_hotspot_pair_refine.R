@@ -6,12 +6,14 @@ concentration_hotspot_pair_refine <- function(
     radius = 200,
     cell_size = 100,
     grid_precision = 1,
-    max_refinement_points = 1000,
+    max_refinement_points = 1500,
     threshold = NULL,
     lon = "lon",
     lat = "lat",
     crs_metric = 3035,
-    progress = TRUE
+    progress = TRUE,
+    initial_candidate_cells = NULL,
+    initial_state = NULL
 ) {
   value <- validate_hotspot_value(value)
   validate_pair_refine_input(data, value, top_n, radius, cell_size,
@@ -21,8 +23,12 @@ concentration_hotspot_pair_refine <- function(
 
   data$ix <- seq_len(nrow(data))
   original <- data
-  state <- initialise_terra_hotspot_state(data, value, radius, cell_size,
-                                          lon, lat, crs_metric)
+  state <- if (is.null(initial_state)) {
+    initialise_terra_hotspot_state(data, value, radius, cell_size,
+                                   lon, lat, crs_metric)
+  } else {
+    initial_state
+  }
   metric <- convert_crs_df(data, 4326, crs_metric, lon, lat, "x", "y")
 
   pts_lst <- vector("list", top_n)
@@ -31,13 +37,24 @@ concentration_hotspot_pair_refine <- function(
   input_threshold <- threshold
   threshold_out <- NA_real_
   refinement_methods <- character(top_n)
+  profile_results <- vector("list", top_n)
+  pair_cache <- list()
+  previous_candidate_cells <- integer()
+  # With non-negative values and the automatic lower bound, the expanded focal
+  # window is an upper bound for every exact centre in a raster cell. Therefore
+  # only centres whose own cell survived screening need exact evaluation.
+  filter_centres <- is.null(input_threshold) &&
+    all(metric[[value]] >= 0) &&
+    !is.null(state$raster_geometry)
 
   hotspot_progress(progress, "Using continuous hotspot search.")
 
   for (i in seq_len(top_n)) {
     hotspot_progress(progress, "Hotspot ", i, " of ", top_n,
                      ": terra focal screening.")
-    threshold_i <- if (is.null(input_threshold)) {
+    threshold_i <- if (i == 1L && !is.null(initial_candidate_cells)) {
+      if (is.null(input_threshold)) NA_real_ else input_threshold
+    } else if (is.null(input_threshold)) {
       estimate_hotspot_candidate_threshold(
         state$focal,
         data,
@@ -48,8 +65,19 @@ concentration_hotspot_pair_refine <- function(
       input_threshold
     }
     threshold_out <- threshold_i
-    candidate_cells <- cells_above_threshold_with_values(state$focal,
-                                                         threshold_i)
+    candidate_cells <- if (i == 1L && !is.null(initial_candidate_cells)) {
+      initial_candidate_cells
+    } else {
+      cells_above_threshold_with_values(state$focal, threshold_i)
+    }
+    if (filter_centres && !(i == 1L && !is.null(initial_candidate_cells))) {
+      screened <- tighten_hotspot_candidate_cells(
+        candidate_cells, state, metric, value, radius, threshold_i
+      )
+      candidate_cells <- screened$cells
+      threshold_i <- screened$threshold
+      threshold_out <- threshold_i
+    }
     if (nrow(candidate_cells) == 0L) {
       rlang::abort("No candidate cells found above the hotspot threshold.",
                    call = NULL)
@@ -57,19 +85,46 @@ concentration_hotspot_pair_refine <- function(
 
     hotspot_progress(progress, "Hotspot ", i, " of ", top_n,
                      ": ", nrow(candidate_cells),
-                     " focal candidate cells above lower bound.")
+                     " candidate cells retained after screening.")
+
+    if (isTRUE(filter_centres) &&
+        any(!candidate_cells$cell %in% previous_candidate_cells)) {
+      # A newly admitted cell can contain a better centre that an older cached
+      # refinement was not allowed to score. Removing cells alone is safe as
+      # long as the cached winning centre remains in the selected set.
+      pair_cache <- list()
+    }
+    previous_candidate_cells <- candidate_cells$cell
 
     pair_candidate <- pair_refine_candidate_cells(
       candidate_cells = candidate_cells,
       metric = metric,
+      state = state,
       value = value,
       radius = radius,
       cell_size = cell_size,
-      max_refinement_points = max_refinement_points
+      max_refinement_points = max_refinement_points,
+      cache = pair_cache,
+      filter_centres = filter_centres,
+      global_only = top_n == 1L
     )
+    pair_cache <- pair_candidate$cache
+    profile_results[[i]] <- pair_candidate$diagnostics
     hotspot_progress(progress, "Hotspot ", i, " of ", top_n,
                      ": largest local refinement subset has ",
                      pair_candidate$local_points, " points.")
+    hotspot_progress(progress, "Hotspot ", i, " of ", top_n,
+                     ": reused ", pair_candidate$cache_hits,
+                     " cached candidate refinements and computed ",
+                     pair_candidate$cache_misses, ".")
+    if (!is.null(pair_candidate$diagnostics) &&
+        isTRUE(pair_candidate$diagnostics$centre_filter_applied)) {
+      hotspot_progress(
+        progress, "Hotspot ", i, " of ", top_n, ": evaluated ",
+        pair_candidate$diagnostics$evaluated_centres,
+        " centres after focal-cell screening."
+      )
+    }
 
     if (!isTRUE(pair_candidate$use_grid)) {
       hotspot_progress(progress, "Hotspot ", i, " of ", top_n,
@@ -147,11 +202,19 @@ concentration_hotspot_pair_refine <- function(
         rlang::abort("Need more rows", call = NULL)
       }
 
+      cells <- map_points_to_cells(selected_rows, state$focal, lon, lat, 4326,
+                                   crs_metric)
+      affected_cells <- map_points_to_cells(selected_rows, state$focal, lon,
+                                            lat, 4326, crs_metric,
+                                            r = radius)
+      pair_cache <- invalidate_pair_refine_cache(
+        pair_cache,
+        removed_ix = selected$ix,
+        affected_cells = affected_cells
+      )
       state$spatvctr <- state$spatvctr[
         !state$spatvctr$ix %in% selected$ix,
       ]
-      cells <- map_points_to_cells(selected_rows, state$focal, lon, lat, 4326,
-                                   crs_metric)
       extent <- terra::ext(state$raster, cells)
       state$rasterized <- update_rasterize(state$rasterized, extent,
                                            state$spatvctr, value)
@@ -174,59 +237,206 @@ concentration_hotspot_pair_refine <- function(
   )
   attr(out, "method") <- "continuous"
   attr(out, "refinement_methods") <- refinement_methods
+  if (isTRUE(getOption("spatialrisk.profile", FALSE))) {
+    attr(out, "profile") <- profile_results
+  }
   out
 }
 
 pair_refine_candidate_cells <- function(candidate_cells, metric, value, radius,
-                                        cell_size, max_refinement_points) {
+                                        cell_size, max_refinement_points,
+                                        state = NULL,
+                                        cache = list(),
+                                        filter_centres = FALSE,
+                                        global_only = FALSE) {
   best_concentration <- -Inf
   best_x <- NA_real_
   best_y <- NA_real_
   best_selected <- NULL
   max_local_points <- 0L
+  cache_hits <- 0L
+  cache_misses <- 0L
 
-  for (j in seq_len(nrow(candidate_cells))) {
-    local_ix <- local_pair_refine_subset(metric, candidate_cells$x[j],
-                                         candidate_cells$y[j], radius,
-                                         cell_size)
-    max_local_points <- max(max_local_points, length(local_ix))
-    if (length(local_ix) == 0L) {
-      next
-    }
+  missing_keys <- character()
+  missing_rows <- integer()
+  missing_local <- list()
+  row_lookup <- integer(max(metric$ix))
+  row_lookup[metric$ix] <- seq_len(nrow(metric))
+  profile_enabled <- isTRUE(getOption("spatialrisk.profile", FALSE))
+  local_extraction_start <- proc.time()[["elapsed"]]
 
-    if (length(local_ix) > max_refinement_points) {
-      return(list(use_grid = TRUE, local_points = length(local_ix)))
-    }
-
-    local_metric <- metric[local_ix, , drop = FALSE]
-    # In the continuous fixed-radius problem, an optimum can occur at a point
-    # location or at one of the two circle centres induced by a pair of points.
-    best_local <- pair_intersection_best_cpp(
-      x_ref = local_metric$x,
-      y_ref = local_metric$y,
-      value_ref = local_metric[[value]],
-      ix_ref = local_metric$ix,
-      radius = radius,
-      cell_width = radius
-    )
-
-    selected <- indexed_points_in_radius_cpp(
-      x_center = best_local$x[1],
-      y_center = best_local$y[1],
+  if (isTRUE(global_only) && !is.null(state$point_cells) &&
+      !is.null(state$raster_geometry)) {
+    search_radius <- radius + max(radius, 2 * sqrt(2) * cell_size)
+    geometry <- state$raster_geometry
+    union <- candidate_union_rows_cpp(
+      candidate_cell_ids = as.integer(candidate_cells$cell),
+      x_candidates = candidate_cells$x,
+      y_candidates = candidate_cells$y,
+      point_cell_ids = as.integer(state$point_cells$cell),
       x_ref = metric$x,
       y_ref = metric$y,
-      value_ref = metric[[value]],
-      ix_ref = metric$ix,
-      radius = radius,
-      cell_width = radius
+      search_radius = search_radius,
+      xres = geometry$xres,
+      yres = geometry$yres,
+      raster_nrow = geometry$nrow,
+      raster_ncol = geometry$ncol
     )
+    max_local_points <- union$max_local_points
+    cache_misses <- nrow(candidate_cells)
+    if (max_local_points > max_refinement_points) {
+      return(list(
+        use_grid = TRUE,
+        local_points = max_local_points,
+        cache = cache,
+        cache_hits = cache_hits,
+        cache_misses = cache_misses
+      ))
+    }
+    missing_keys <- "global"
+    missing_rows <- 1L
+    missing_local <- list(union$rows)
+  } else {
+    for (j in seq_len(nrow(candidate_cells))) {
+      cell <- candidate_cells$cell[j]
+      key <- as.character(cell)
+      cached <- cache[[key]]
+      if (isTRUE(filter_centres) && !is.null(cached) &&
+          (is.null(cached$center_cell) ||
+           !cached$center_cell %in% candidate_cells$cell)) {
+        cached <- NULL
+      }
 
-    full_concentration <- sum(selected$value)
-    if (full_concentration > best_concentration) {
-      best_concentration <- full_concentration
-      best_x <- best_local$x[1]
-      best_y <- best_local$y[1]
-      best_selected <- selected
+      if (!is.null(cached)) {
+        cache_hits <- cache_hits + 1L
+        max_local_points <- max(max_local_points, cached$local_points)
+        candidate <- cached
+      } else {
+        cache_misses <- cache_misses + 1L
+        local_rows <- local_pair_refine_subset(
+          metric = metric,
+          x_center = candidate_cells$x[j],
+          y_center = candidate_cells$y[j],
+          radius = radius,
+          cell_size = cell_size,
+          state = state,
+          cell = cell,
+          row_lookup = row_lookup
+        )
+        max_local_points <- max(max_local_points, length(local_rows))
+        if (length(local_rows) > max_refinement_points) {
+          return(list(
+            use_grid = TRUE,
+            local_points = length(local_rows),
+            cache = cache,
+            cache_hits = cache_hits,
+            cache_misses = cache_misses
+          ))
+        }
+        missing_keys <- c(missing_keys, key)
+        missing_rows <- c(missing_rows, j)
+        missing_local[[length(missing_local) + 1L]] <- local_rows
+        next
+      }
+
+      if (candidate$concentration > best_concentration) {
+        best_concentration <- candidate$concentration
+        best_x <- candidate$x
+        best_y <- candidate$y
+        best_selected <- candidate$selected
+      }
+    }
+  }
+  local_extraction_seconds <- proc.time()[["elapsed"]] -
+    local_extraction_start
+
+  rcpp_seconds <- 0
+  if (length(missing_local) > 0L) {
+    non_empty <- lengths(missing_local) > 0L
+    if (any(non_empty)) {
+      batch_rows <- lapply(missing_local[non_empty], as.integer)
+      rcpp_start <- proc.time()[["elapsed"]]
+      batch <- pair_intersection_best_groups_cpp(
+        candidate_rows = batch_rows,
+        x_ref = metric$x,
+        y_ref = metric$y,
+        value_ref = metric[[value]],
+        ix_ref = metric$ix,
+        radius = radius,
+        cell_width = radius,
+        selected_cell_ids = as.integer(candidate_cells$cell),
+        raster_geometry = hotspot_raster_geometry_vector(state),
+        filter_centres = filter_centres,
+        profile = profile_enabled,
+        global_only = global_only
+      )
+      rcpp_seconds <- proc.time()[["elapsed"]] - rcpp_start
+      # This terra lookup is retained with each cached optimum so a later greedy
+      # iteration cannot reuse a centre whose cell is no longer selected.
+      batch_center_cells <- if (isTRUE(filter_centres)) {
+        terra::cellFromXY(state$raster, cbind(batch$x, batch$y))
+      } else {
+        rep(NA_integer_, length(batch$x))
+      }
+
+      if (isTRUE(global_only)) {
+        diagnostics <- batch$diagnostics
+        if (profile_enabled) {
+          diagnostics$time_local_extraction_seconds <-
+            local_extraction_seconds
+          diagnostics$time_rcpp_batch_seconds <- rcpp_seconds
+          diagnostics$n_active_points <- nrow(metric)
+          diagnostics$n_candidate_cells <- nrow(candidate_cells)
+          diagnostics$max_local_points <- max_local_points
+          diagnostics$total_potential_union_pairs <-
+            diagnostics$unique_observed_centres *
+            (diagnostics$unique_observed_centres - 1) / 2
+          diagnostics$radius_sum_calls <- diagnostics$evaluated_centres
+        }
+        return(list(
+          use_grid = FALSE,
+          x = batch$x[1],
+          y = batch$y[1],
+          concentration = batch$concentration[1],
+          local_points = max_local_points,
+          selected = batch$selected[[1]],
+          cache = cache,
+          cache_hits = cache_hits,
+          cache_misses = cache_misses,
+          diagnostics = diagnostics
+        ))
+      }
+    }
+
+    batch_index <- 0L
+    for (k in seq_along(missing_local)) {
+      j <- missing_rows[k]
+      key <- missing_keys[k]
+      local_rows <- missing_local[[k]]
+      if (length(local_rows) == 0L) {
+        candidate <- empty_pair_refine_candidate(candidate_cells$cell[j])
+      } else {
+        batch_index <- batch_index + 1L
+        candidate <- list(
+          use_grid = FALSE,
+          cell = candidate_cells$cell[j],
+          x = batch$x[batch_index],
+          y = batch$y[batch_index],
+          concentration = batch$concentration[batch_index],
+          center_cell = batch_center_cells[batch_index],
+          local_points = length(local_rows),
+          local_ix = metric$ix[local_rows],
+          selected_ix = batch$selected[[batch_index]]$ix,
+          selected = batch$selected[[batch_index]]
+        )
+      }
+      cache[[key]] <- candidate
+      if (candidate$concentration > best_concentration) {
+        best_concentration <- candidate$concentration
+        best_x <- candidate$x
+        best_y <- candidate$y
+        best_selected <- candidate$selected
+      }
     }
   }
 
@@ -241,8 +451,64 @@ pair_refine_candidate_cells <- function(candidate_cells, metric, value, radius,
     y = best_y,
     concentration = best_concentration,
     local_points = max_local_points,
-    selected = best_selected
+    selected = best_selected,
+    cache = cache,
+    cache_hits = cache_hits,
+    cache_misses = cache_misses,
+    diagnostics = if (exists("batch", inherits = FALSE)) {
+      diagnostics <- batch$diagnostics
+      if (profile_enabled) {
+        diagnostics$time_local_extraction_seconds <- local_extraction_seconds
+        diagnostics$time_rcpp_batch_seconds <- rcpp_seconds
+        diagnostics$n_active_points <- nrow(metric)
+        diagnostics$n_candidate_cells <- nrow(candidate_cells)
+        diagnostics$max_local_points <- max_local_points
+        diagnostics$radius_sum_calls <- diagnostics$evaluated_centres
+      }
+      diagnostics
+    } else {
+      NULL
+    }
   )
+}
+
+empty_pair_refine_candidate <- function(cell) {
+  list(
+    use_grid = FALSE,
+    cell = cell,
+    x = NA_real_,
+    y = NA_real_,
+    concentration = -Inf,
+    center_cell = NA_integer_,
+    local_points = 0L,
+    local_ix = integer(),
+    selected_ix = integer(),
+    selected = data.frame(ix = integer(), distance_m = numeric(),
+                          value = numeric())
+  )
+}
+
+hotspot_raster_geometry_vector <- function(state) {
+  if (is.null(state) || is.null(state$raster_geometry)) {
+    return(rep(0, 8))
+  }
+  geometry <- state$raster_geometry
+  unname(unlist(geometry[c("xmin", "xmax", "ymin", "ymax", "xres", "yres",
+                           "nrow", "ncol")], use.names = FALSE))
+}
+
+invalidate_pair_refine_cache <- function(cache, removed_ix, affected_cells) {
+  if (length(cache) == 0L) {
+    return(cache)
+  }
+
+  keep <- vapply(cache, function(entry) {
+    !entry$cell %in% affected_cells &&
+      length(intersect(entry$local_ix, removed_ix)) == 0L &&
+      length(intersect(entry$selected_ix, removed_ix)) == 0L
+  }, logical(1))
+
+  cache[keep]
 }
 
 #' @noRd
@@ -270,10 +536,11 @@ concentration_hotspot_pair_intersections <- function(
 
   for (i in seq_len(top_n)) {
     best <- pair_intersection_best_cpp(
+      x_candidates = metric$x,
+      y_candidates = metric$y,
       x_ref = metric$x,
       y_ref = metric$y,
       value_ref = metric[[value]],
-      ix_ref = metric$ix,
       radius = radius,
       cell_width = radius
     )
@@ -323,7 +590,9 @@ concentration_hotspot_pair_intersections <- function(
     lat = lat,
     crs_metric = crs_metric
   )
-  attr(out, "method") <- "continuous_exact"
+  attr(out, "method") <- "continuous"
+  attr(out, "candidate_search") <- "full"
+  attr(out, "refinement_methods") <- rep("pair_intersections_full", top_n)
   out
 }
 
@@ -351,9 +620,61 @@ terra_screening_center <- function(focal) {
 }
 
 local_pair_refine_subset <- function(metric, x_center, y_center, radius,
-                                     cell_size) {
+                                     cell_size, state = NULL, cell = NULL,
+                                     row_lookup = NULL) {
   search_radius <- radius + max(radius, 2 * sqrt(2) * cell_size)
-  dx <- metric$x - x_center
-  dy <- metric$y - y_center
-  which(dx * dx + dy * dy <= search_radius * search_radius)
+  if (is.null(state) || is.null(state$points_by_cell) ||
+      is.null(state$raster)) {
+    candidate_rows <- seq_len(nrow(metric))
+  } else {
+    if (is.null(cell) || is.na(cell)) {
+      cell <- terra::cellFromXY(
+        state$raster,
+        matrix(c(x_center, y_center), ncol = 2)
+      )
+    }
+    nearby_cells <- raster_cells_near_center(
+      state$raster, x_center, y_center, search_radius,
+      geometry = state$raster_geometry
+    )
+    nearby_ix <- unlist(
+      state$points_by_cell[as.character(nearby_cells)],
+      use.names = FALSE
+    )
+    candidate_rows <- if (is.null(row_lookup)) {
+      match(nearby_ix, metric$ix, nomatch = 0L)
+    } else {
+      unname(row_lookup[nearby_ix])
+    }
+    candidate_rows <- candidate_rows[candidate_rows > 0L]
+  }
+
+  dx <- metric$x[candidate_rows] - x_center
+  dy <- metric$y[candidate_rows] - y_center
+  candidate_rows[dx * dx + dy * dy <= search_radius * search_radius]
+}
+
+raster_cells_near_center <- function(raster, x, y, distance,
+                                     geometry = NULL) {
+  g <- if (is.null(geometry)) hotspot_raster_geometry(raster) else geometry
+  margin <- max(g$xres, g$yres)
+  xmin <- x - distance - margin
+  xmax <- x + distance + margin
+  ymin <- y - distance - margin
+  ymax <- y + distance + margin
+
+  col_min <- floor((xmin - g$xmin) / g$xres) + 1L
+  col_max <- floor((xmax - g$xmin) / g$xres) + 1L
+  row_min <- floor((g$ymax - ymax) / g$yres) + 1L
+  row_max <- floor((g$ymax - ymin) / g$yres) + 1L
+  col_min <- max(1L, col_min)
+  col_max <- min(g$ncol, col_max)
+  row_min <- max(1L, row_min)
+  row_max <- min(g$nrow, row_max)
+  if (col_min > col_max || row_min > row_max) {
+    return(integer())
+  }
+  cols <- seq.int(col_min, col_max)
+  rows <- seq.int(row_min, row_max)
+  as.vector(outer((rows - 1L) * g$ncol, cols, `+`))
 }

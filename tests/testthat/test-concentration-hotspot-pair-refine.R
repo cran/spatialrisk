@@ -1,5 +1,16 @@
 library(spatialrisk)
 
+test_that("public hotspot refinement defaults are 1500 points", {
+  expect_identical(
+    formals(concentration_hotspot)$max_refinement_points,
+    1500
+  )
+  expect_identical(
+    formals(select_candidates)$max_refinement_points,
+    1500
+  )
+})
+
 continuous_metric_toy_data <- function() {
   metric <- data.frame(
     x = c(4300000, 4300050, 4300000, 4300200, 4301000, 4301200),
@@ -36,7 +47,7 @@ test_that("continuous output structure matches grid method", {
     value = "amount",
     radius = 200,
     cell_size = 100,
-    grid_precision = 5,
+    grid_spacing = 5,
     method = "grid",
     progress = FALSE
   )
@@ -87,7 +98,7 @@ test_that("explicit grid method remains available", {
     value = "amount",
     radius = 200,
     cell_size = 100,
-    grid_precision = 5,
+    grid_spacing = 5,
     method = "grid",
     progress = FALSE
   )
@@ -103,13 +114,13 @@ test_that("explicit grid method remains available", {
   expect_equal(attr(pair_out, "method"), "continuous")
 })
 
-test_that("continuous top_n removes selected points", {
+test_that("continuous n_hotspots removes selected points", {
   x <- Groningen[1:200, c("lon", "lat", "amount")]
 
   out <- concentration_hotspot(
     x,
     value = "amount",
-    top_n = 2,
+    n_hotspots = 2,
     radius = 200,
     cell_size = 100,
     progress = FALSE
@@ -121,19 +132,309 @@ test_that("continuous top_n removes selected points", {
   expect_length(intersect(first_row, second_row), 0)
 })
 
-test_that("continuous top_n concentrations are non-increasing", {
+test_that("continuous n_hotspots concentrations are non-increasing", {
   x <- Groningen[1:300, c("lon", "lat", "amount")]
 
   out <- concentration_hotspot(
     x,
     value = "amount",
-    top_n = 4,
+    n_hotspots = 4,
     radius = 200,
     cell_size = 100,
     progress = FALSE
   )
 
   expect_true(all(diff(out$hotspots$amount_sum) <= 0))
+})
+
+test_that("continuous hotspot result is stable across cell sizes", {
+  x <- Groningen[1:300, c("lon", "lat", "amount")]
+  cell_sizes <- c(25, 50, 100, 150, 200)
+
+  out <- lapply(cell_sizes, function(cell_size) {
+    concentration_hotspot(
+      x,
+      value = "amount",
+      radius = 200,
+      cell_size = cell_size,
+      progress = FALSE
+    )
+  })
+
+  amount_sum <- vapply(out, function(result) result$hotspots$amount_sum,
+                       numeric(1))
+  contributing_rows <- lapply(out, function(result) {
+    sort(result$contributing_points$data_row)
+  })
+
+  expect_equal(amount_sum, rep(amount_sum[[1]], length(amount_sum)))
+  expect_equal(contributing_rows, rep(contributing_rows[1], length(cell_sizes)))
+})
+
+test_that("continuous pair refinement cache reuses unaffected cells", {
+  x <- Groningen[1:120, c("lon", "lat", "amount")]
+  x$ix <- seq_len(nrow(x))
+  state <- spatialrisk:::initialise_terra_hotspot_state(
+    x,
+    value = "amount",
+    radius = 200,
+    cell_size = 100,
+    lon = "lon",
+    lat = "lat",
+    crs_metric = 3035
+  )
+  metric <- convert_crs_df(x, 4326, 3035, "lon", "lat", "x", "y")
+  threshold <- spatialrisk:::estimate_hotspot_candidate_threshold(
+    state$focal,
+    x,
+    list(value = "amount", cell_size = 100, radius = 200,
+         crs_metric = 3035, lon = "lon", lat = "lat")
+  )
+  candidate_cells <- spatialrisk:::cells_above_threshold_with_values(
+    state$focal,
+    threshold
+  )
+
+  first <- spatialrisk:::pair_refine_candidate_cells(
+    candidate_cells = candidate_cells,
+    metric = metric,
+    state = state,
+    value = "amount",
+    radius = 200,
+    cell_size = 100,
+    max_refinement_points = 1000,
+    cache = list()
+  )
+  second <- spatialrisk:::pair_refine_candidate_cells(
+    candidate_cells = candidate_cells,
+    metric = metric,
+    state = state,
+    value = "amount",
+    radius = 200,
+    cell_size = 100,
+    max_refinement_points = 1000,
+    cache = first$cache
+  )
+
+  expect_gt(first$cache_misses, 0)
+  expect_equal(second$cache_hits, nrow(candidate_cells))
+  expect_equal(second$cache_misses, 0)
+  expect_equal(second$concentration, first$concentration)
+
+  invalidated <- spatialrisk:::invalidate_pair_refine_cache(
+    first$cache,
+    removed_ix = first$selected$ix[1],
+    affected_cells = integer()
+  )
+  expect_lt(length(invalidated), length(first$cache))
+})
+
+test_that("prepared raster cells recover the same local points as a full scan", {
+  x <- Groningen[1:200, c("lon", "lat", "amount")]
+  x$ix <- seq_len(nrow(x))
+  state <- spatialrisk:::initialise_terra_hotspot_state(
+    x, "amount", radius = 200, cell_size = 100,
+    lon = "lon", lat = "lat", crs_metric = 3035
+  )
+  metric <- convert_crs_df(x, 4326, 3035, "lon", "lat", "x", "y")
+  candidate <- spatialrisk:::top_n_focals(state$focal, n = 1)
+  cell <- terra::cellFromXY(
+    state$raster,
+    matrix(c(candidate$x[1], candidate$y[1]), ncol = 2)
+  )
+
+  indexed <- spatialrisk:::local_pair_refine_subset(
+    metric, candidate$x[1], candidate$y[1], radius = 200, cell_size = 100,
+    state = state, cell = cell
+  )
+  scanned <- spatialrisk:::local_pair_refine_subset(
+    metric, candidate$x[1], candidate$y[1], radius = 200, cell_size = 100
+  )
+  expect_equal(sort(metric$ix[indexed]), sort(metric$ix[scanned]))
+
+  active <- metric[-indexed[1], , drop = FALSE]
+  indexed_active <- spatialrisk:::local_pair_refine_subset(
+    active, candidate$x[1], candidate$y[1], radius = 200, cell_size = 100,
+    state = state, cell = cell
+  )
+  expect_false(metric$ix[indexed[1]] %in% active$ix[indexed_active])
+})
+
+test_that("batched pair refinement matches separate candidate-cell calls", {
+  x <- Groningen[1:160, c("lon", "lat", "amount")]
+  x$ix <- seq_len(nrow(x))
+  state <- spatialrisk:::initialise_terra_hotspot_state(
+    x, "amount", radius = 200, cell_size = 100,
+    lon = "lon", lat = "lat", crs_metric = 3035
+  )
+  metric <- convert_crs_df(x, 4326, 3035, "lon", "lat", "x", "y")
+  candidate_cells <- spatialrisk:::cells_above_threshold_with_values(
+    state$focal,
+    max(terra::values(state$focal), na.rm = TRUE) * 0.9
+  )
+  groups <- lapply(seq_len(nrow(candidate_cells)), function(i) {
+    spatialrisk:::local_pair_refine_subset(
+      metric, candidate_cells$x[i], candidate_cells$y[i],
+      radius = 200, cell_size = 100, state = state,
+      cell = candidate_cells$cell[i]
+    )
+  })
+  groups <- groups[lengths(groups) > 0]
+
+  batched <- spatialrisk:::pair_intersection_best_groups_cpp(
+    lapply(groups, as.integer), metric$x, metric$y, metric$amount, metric$ix,
+    radius = 200, cell_width = 200,
+    selected_cell_ids = integer(), raster_geometry = rep(0, 8),
+    filter_centres = FALSE
+  )
+  separate <- lapply(groups, function(rows) {
+    spatialrisk:::pair_intersection_best_cpp(
+      metric$x[rows], metric$y[rows], metric$x, metric$y, metric$amount,
+      radius = 200, cell_width = 200
+    )
+  })
+
+  expect_equal(batched$x, vapply(separate, `[[`, numeric(1), "x"))
+  expect_equal(batched$y, vapply(separate, `[[`, numeric(1), "y"))
+  expect_equal(
+    batched$concentration,
+    vapply(separate, `[[`, numeric(1), "concentration")
+  )
+  expect_gt(
+    batched$diagnostics$raw_point_pairs,
+    batched$diagnostics$unique_point_pairs
+  )
+  expect_gt(
+    batched$diagnostics$raw_observed_centres,
+    batched$diagnostics$unique_observed_centres
+  )
+  expect_equal(
+    batched$diagnostics$evaluated_centres,
+    batched$diagnostics$unique_observed_centres +
+      2 * batched$diagnostics$unique_point_pairs
+  )
+
+  filtered <- spatialrisk:::pair_intersection_best_groups_cpp(
+    lapply(groups, as.integer), metric$x, metric$y, metric$amount, metric$ix,
+    radius = 200, cell_width = 200,
+    selected_cell_ids = as.integer(candidate_cells$cell),
+    raster_geometry = spatialrisk:::hotspot_raster_geometry_vector(state),
+    filter_centres = TRUE
+  )
+  expect_true(filtered$diagnostics$centre_filter_applied)
+  expect_lt(filtered$diagnostics$evaluated_centres,
+            batched$diagnostics$evaluated_centres)
+  expect_equal(max(filtered$concentration), max(batched$concentration))
+
+  streaming <- spatialrisk:::pair_intersection_best_groups_cpp(
+    lapply(groups, as.integer), metric$x, metric$y, metric$amount, metric$ix,
+    radius = 200, cell_width = 200,
+    selected_cell_ids = as.integer(candidate_cells$cell),
+    raster_geometry = spatialrisk:::hotspot_raster_geometry_vector(state),
+    filter_centres = TRUE, profile = TRUE, global_only = TRUE
+  )
+  expect_equal(streaming$concentration, max(filtered$concentration))
+  expect_true(streaming$diagnostics$streaming_angular_sweep)
+  expect_lte(streaming$diagnostics$evaluated_intersection_centres,
+             filtered$diagnostics$evaluated_intersection_centres)
+})
+
+test_that("streaming refinement exposes optional phase diagnostics", {
+  old <- options(spatialrisk.profile = TRUE)
+  on.exit(options(old), add = TRUE)
+  x <- Groningen[1:200, c("lon", "lat", "amount")]
+
+  out <- concentration_hotspot(
+    x, value = "amount", radius = 200, cell_size = 100,
+    max_refinement_points = 1500, progress = FALSE
+  )
+  profile <- attr(out, "profile")[[1]]
+
+  expect_true(profile$streaming_angular_sweep)
+  expect_gte(profile$intersections_generated,
+             profile$evaluated_intersection_centres)
+  expect_gte(profile$time_local_extraction_seconds, 0)
+  expect_gte(profile$time_rcpp_batch_seconds, 0)
+})
+
+test_that("streaming sweep matches exhaustive pair scoring", {
+  for (seed in 1:20) {
+    set.seed(seed)
+    n <- 18L
+    x <- runif(n, 0, 600)
+    y <- runif(n, 0, 600)
+    if (seed == 1L) {
+      x[2] <- x[1]
+      y[2] <- y[1]
+    }
+    value <- sample(1:100, n, replace = TRUE)
+    rows <- list(seq_len(n))
+
+    exhaustive <- spatialrisk:::pair_intersection_best_cpp(
+      x, y, x, y, value, radius = 120, cell_width = 120
+    )
+    streaming <- spatialrisk:::pair_intersection_best_groups_cpp(
+      rows, x, y, value, seq_len(n), radius = 120, cell_width = 120,
+      selected_cell_ids = integer(), raster_geometry = rep(0, 8),
+      filter_centres = FALSE, profile = FALSE, global_only = TRUE
+    )
+
+    expect_equal(streaming$concentration, exhaustive$concentration)
+  }
+})
+
+test_that("streaming sweep handles dense candidate geometry", {
+  set.seed(20260815)
+  n <- 160L
+  x <- runif(n, 0, 240)
+  y <- runif(n, 0, 240)
+  value <- sample(1:1000, n, replace = TRUE)
+
+  exhaustive <- spatialrisk:::pair_intersection_best_cpp(
+    x, y, x, y, value, radius = 100, cell_width = 100
+  )
+  streaming <- spatialrisk:::pair_intersection_best_groups_cpp(
+    list(seq_len(n)), x, y, value, seq_len(n),
+    radius = 100, cell_width = 100,
+    selected_cell_ids = integer(), raster_geometry = rep(0, 8),
+    filter_centres = FALSE, profile = TRUE, global_only = TRUE
+  )
+
+  expect_equal(streaming$concentration, exhaustive$concentration)
+  expect_gt(streaming$diagnostics$intersections_generated, 10000)
+  expect_lt(streaming$diagnostics$evaluated_intersection_centres,
+            streaming$diagnostics$intersections_generated)
+  expect_equal(streaming$diagnostics$approx_pair_cache_payload_bytes, 0)
+})
+
+test_that("pair geometry handles tangent, coincident, and repeated centres", {
+  tangent <- spatialrisk:::pair_intersection_best_cpp(
+    c(0, 20), c(0, 0), c(0, 20), c(0, 0), c(1, 1),
+    radius = 10, cell_width = 10
+  )
+  expect_equal(tangent$concentration, 2)
+  expect_equal(tangent$x, 10, tolerance = 1e-12)
+  expect_equal(tangent$y, 0, tolerance = 1e-12)
+
+  coincident <- spatialrisk:::pair_intersection_best_cpp(
+    c(0, 0, 30), c(0, 0, 0), c(0, 0, 30), c(0, 0, 0), c(2, 3, 1),
+    radius = 10, cell_width = 10
+  )
+  expect_equal(coincident$concentration, 5)
+
+  angles <- c(0, 2 * pi / 3, 4 * pi / 3)
+  repeated <- spatialrisk:::pair_intersection_best_cpp(
+    10 * cos(angles), 10 * sin(angles),
+    10 * cos(angles), 10 * sin(angles), rep(1, 3),
+    radius = 10, cell_width = 10
+  )
+  expect_equal(repeated$concentration, 3)
+
+  equal_maxima <- spatialrisk:::pair_intersection_best_cpp(
+    c(0, 100), c(0, 0), c(0, 100), c(0, 0), c(5, 5),
+    radius = 10, cell_width = 10
+  )
+  expect_equal(equal_maxima$concentration, 5)
 })
 
 test_that("continuous falls back to grid refinement above point limit", {
@@ -144,7 +445,7 @@ test_that("continuous falls back to grid refinement above point limit", {
     value = "amount",
     radius = 200,
     cell_size = 100,
-    grid_precision = 5,
+    grid_spacing = 5,
     max_refinement_points = 1,
     progress = FALSE
   )

@@ -2,35 +2,38 @@
 % Please edit documentation in R/highest_concentration_terra.R
 \name{concentration_hotspot}
 \alias{concentration_hotspot}
-\title{Identify fixed-radius concentration hotspots}
+\title{Find fixed-radius concentration hotspots}
 \usage{
 concentration_hotspot(
   data,
   value,
-  top_n = 1,
+  n_hotspots = 1,
   radius = 200,
   cell_size = 100,
-  grid_precision = 1,
-  max_refinement_points = 1000,
+  grid_spacing = 1,
+  max_refinement_points = 1500,
   lon = "lon",
   lat = "lat",
   crs_metric = 3035,
   progress = TRUE,
-  method = c("continuous", "grid", "observed")
+  method = c("continuous", "observed", "grid"),
+  top_n = lifecycle::deprecated(),
+  grid_precision = lifecycle::deprecated()
 )
 }
 \arguments{
 \item{data}{A data.frame containing point-level exposures. Must include columns
-for longitude, latitude, and the value of interest.}
+for longitude and latitude in EPSG:4326 and the value of interest. The
+coordinates are projected internally to `crs_metric`.}
 
 \item{value}{A string giving the name of the numeric column in \code{data} to
 aggregate within each radius.}
 
-\item{top_n}{Positive integer greater or equal to 1. Specifies how many
-non-overlapping hotspots are returned. Default is \code{1}.}
+\item{n_hotspots}{Positive integer greater or equal to 1. Number of
+sequential non-overlapping hotspots to return. Default is \code{1}.}
 
 \item{radius}{Numeric. Radius of the circle in meters. This is typically the
-regulatory or scenario radius. Default is \code{200}.}
+application-specific radius of interest. Default is \code{200}.}
 
 \item{cell_size}{Numeric. Size of the initial screening cells in meters.
 This is used by \code{method = "continuous"} and \code{method = "grid"}.
@@ -38,17 +41,18 @@ Smaller values give a finer initial search but increase computation time.
 \code{method = "observed"} searches observed point locations and does not
 use this value as a search-grid resolution. Default is \code{100}.}
 
-\item{grid_precision}{Numeric. Approximate spacing in meters used for
-grid-based refinement. This is used by \code{method = "grid"} and by
+\item{grid_spacing}{Numeric. Spacing between candidate grid centres in the
+units of \code{crs_metric}; for the default metric CRS these units are
+meters. This is used by \code{method = "grid"} and by
 \code{method = "continuous"} only when the local subset is larger than
 \code{max_refinement_points} and the method falls back to grid refinement.
 It is not used by \code{method = "observed"}. Smaller values evaluate more
-candidate centres and increase search precision. Default is \code{1}.}
+candidate centres and increase computation time. Default is \code{1}.}
 
 \item{max_refinement_points}{Positive integer. Maximum number of local points
 used for pair-intersection refinement. If the local subset contains more
 points, \code{method = "continuous"} automatically falls back to the grid
-refinement used by \code{method = "grid"}. Default is \code{1000}.}
+refinement used by \code{method = "grid"}. Default is \code{1500}.}
 
 \item{lon}{A string giving the longitude column in \code{data}. Default is
 \code{"lon"}.}
@@ -67,12 +71,16 @@ national projected CRS or the relevant UTM zone. Default is \code{3035}.}
 
 \item{progress}{Logical. Whether to print progress messages for the main
 hotspot search steps. This is useful for larger portfolios and for
-\code{top_n > 1}. Default is \code{TRUE}.}
+\code{n_hotspots > 1}. Default is \code{TRUE}.}
 
 \item{method}{Hotspot search strategy. \code{"continuous"} is the default
 and searches for a centre that may lie between observed points.
 \code{"observed"} searches only observed point locations as candidate
 centres. \code{"grid"} uses the original grid-refinement workflow.}
+
+\item{top_n}{Deprecated. Use \code{n_hotspots} instead.}
+
+\item{grid_precision}{Deprecated. Use \code{grid_spacing} instead.}
 }
 \value{
 An object of class \code{hotspot}. The main components are
@@ -84,44 +92,78 @@ An object of class \code{hotspot}. The main components are
   contributing point in the original input data.
 }
 \description{
-Identifies centre coordinates of fixed-radius circles with high
-local concentration. In insurance applications this can be used to find
-locations where the total insured value within a prescribed radius is largest.
+Finds fixed-radius concentration hotspots in weighted
+point-level data. This is a computational building block for weighted
+circle-placement problems: given point locations and a fixed radius, find a
+centre whose surrounding circle contains a large aggregated value. In
+insurance applications, the weights may represent insured values or another
+exposure measure.
 This function is a wrapper around the decomposed workflow
 \code{\link{prepare_spatialrisk}}, \code{\link{select_candidates}}, and
 \code{\link{optimize_hotspot}}.
 }
 \details{
 The default \code{method = "continuous"} first uses terra
-  rasterisation and focal sums to locate an approximate hotspot area. It then
-  refines the local result by evaluating observed local points and the circle
-  centres implied by local point pairs. The local refinement subset is chosen
-  automatically around the terra-selected approximate centre, using a
-  conservative margin based on \code{radius} and \code{cell_size}. If more
+  rasterisation and focal sums to identify candidate areas above an
+  automatically estimated lower bound. It then refines all retained areas
+  using observed local points and the circle centres implied by local point
+  pairs. Local refinement subsets are retrieved from the raster cells that
+  can affect each candidate area, using a conservative margin based on
+  \code{radius} and \code{cell_size}. If more
   than \code{max_refinement_points} local points are involved, it falls back
   to the grid refinement used by \code{method = "grid"}. In that fallback
-  case, \code{grid_precision} controls the local refinement grid; otherwise
-  the pair-intersection step does not use \code{grid_precision}. The
-  pair-refined result is exact only within the terra-selected local search
-  area. The \code{"observed"} method is fast and deterministic, but can miss
+  case, \code{grid_spacing} controls the local refinement grid; otherwise
+  the pair-intersection step does not use \code{grid_spacing}. The
+  focal window includes the radius plus a raster-cell diagonal. For
+  non-negative values this makes the focal sum an upper bound for exact
+  centres in that cell. A second screening bound sums only active points
+  within the radius of the centre-cell rectangle, including numerical
+  boundary tolerance. Feasible trial centres in the most promising surviving
+  cells can improve the lower bound before further pruning. With the default automatic lower bound, exact
+  evaluation is consequently restricted to observed or pair-intersection
+  centres whose own raster cell passed screening; the two centres generated
+  by a point pair are tested separately. For a single hotspot, Rcpp processes
+  these centres as a streaming angular sweep and maintains their exact totals
+  over the complete active portfolio. It therefore avoids materialising all
+  centres or running a separate radius query for each one. A retained centre
+  is never scored only against the points used to generate it.
+  This centre-level pruning is disabled for a user-supplied threshold or
+  negative values. Under non-negative weights, the default automatic
+  threshold, complete pair-intersection refinement, and exact scoring with no
+  grid fallback, this screening is optimality-preserving for the
+  single-disk problem: a cell containing a strictly improving centre cannot
+  be removed. The \code{"observed"} method is
+  fast and deterministic, but can miss
   a larger hotspot when the optimal centre lies between observed points. The
   \code{"grid"} method uses a grid-based search with local refinement;
-  smaller \code{grid_precision} values generally increase precision and
+  smaller \code{grid_spacing} values generally increase search resolution and
   computation time. Use \code{\link{prepare_spatialrisk}},
   \code{\link{select_candidates}}, and \code{\link{optimize_hotspot}} when
-  these steps need to be run or inspected separately.
+  these steps need to be run or inspected separately. The high-level
+  function always uses the screened continuous search.
 
-The pairwise-intersection method treats the hotspot problem as a fixed-radius
-weighted circle placement problem. Candidate centers are generated from
-observed point locations and from intersections of radius-`r` circles around
-pairs of observations. For point observations with non-negative values in a
-projected metric coordinate system, this candidate set is sufficient to find
-the exact optimum for the first hotspot.
+The underlying continuous hotspot problem can be viewed as a fixed-radius
+weighted circle placement problem. For point observations with non-negative
+values in a projected metric coordinate system, candidate centres formed by
+observed point locations and by intersections of radius-`r` circles around
+pairs of observations are sufficient to characterise the single-disk
+optimum. The practical \code{method = "continuous"} implementation retains
+that optimum under the screening conditions stated above. This guarantee does
+not apply to grid fallback, a user-supplied threshold, negative values, or
+joint optimisation of multiple circles.
 
-For `top_n > 1`, hotspots are selected greedily: after each hotspot is found,
-the covered observations are removed before the next hotspot is computed.
-Each step is exact conditional on the remaining observations, but the full
-sequence is not necessarily globally optimal as a joint multi-circle problem.
+Calling \code{optimize_hotspot()} directly on an object returned by
+\code{prepare_spatialrisk()} instead performs the complete geometric
+candidate search over the full active portfolio. Calling it after
+\code{select_candidates()} restricts candidate generation to the screened
+search state. In both routes, every retained centre is scored against the
+complete active portfolio. The direct full route does not use grid fallback
+and is principally intended for small validation or benchmark problems.
+
+For \code{n_hotspots > 1}, hotspots are selected greedily: after each
+hotspot is found, the covered observations are removed before the next
+hotspot is computed. The resulting sequence is not necessarily globally
+optimal as a joint multi-circle problem.
 }
 \examples{
 portfolio <- Groningen[1:200, c("lon", "lat", "amount")]
@@ -130,9 +172,9 @@ hotspot <- concentration_hotspot(
   portfolio,
   value = "amount",
   radius = 200,
+  n_hotspots = 2,
   cell_size = 100,
-  progress = FALSE,
-  top_n = 2
+  progress = FALSE
 )
 
 hotspot$hotspots
@@ -154,7 +196,8 @@ rbind(
 }
 \references{
 Chazelle, B. M. and Lee, D. T. (1986). On a circle placement problem.
-Computing, 36(1--2), 1--16. doi:10.1007/BF02238188.
+Computing, 36(1--2), 1--16.
+\doi{10.1007/BF02238188}.
 }
 \author{
 Martin Haringa

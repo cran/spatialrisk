@@ -70,32 +70,32 @@ convert_crs_df <- function(df, crs_from = 3035, crs_to = 4326,
 #' @param r SpatRaster.
 #' @param radius radius of the circle (in units of the crs).
 #'
-#' @importFrom terra distance
-#' @importFrom terra ext
-#' @importFrom terra rast
-#' @importFrom terra res
-#'
-#' @details \code{mw_create()} is a modified version of
-#' \code{terra::focalMat()}. While \code{terra::focalMat()} creates a matrix
-#' where the border is the distance from the center of the focal cell,
-#' \code{mw_create()} creates a matrix where the border of the moving window
-#' is the distance from the edge of the focal cell.
+#' @details The returned mask includes raster-cell centres whose Euclidean
+#'   distance from the focal-cell centre is no greater than `radius` plus the
+#'   full raster-cell diagonal. This conservative expansion accounts for the
+#'   possible displacement of both a disk centre and a contributing point from
+#'   their respective cell centres.
 #'
 #' @author Martin Haringa
 #'
 #' @keywords internal
 mw_create <- function(r, radius) {
-  d <- radius
   rs <- terra::res(r)
-  nx <- 1 + 2 * ceiling(d / rs[1])
-  ny <- 1 + 2 * ceiling(d / rs[2])
-  m <- matrix(ncol = nx, nrow = ny)
-  m[ceiling(ny / 2), ceiling(nx / 2)] <- 1
-  x <- terra::rast(m, crs = "+proj=utm +zone=1 +datum=WGS84")
-  terra::ext(x) <- c(xmin = 0, xmax = nx * rs[1], ymin = 0, ymax = ny * rs[2])
-  dist_diag_cell <- sqrt(2 * (rs[1] ^ 2))
-  d <- as.matrix(terra::distance(x), wide = TRUE) <= d + dist_diag_cell
-  d / d
+  # A centre and a contributing point can each lie half a cell diagonal away
+  # from their raster-cell centre. The full diagonal therefore has to be added
+  # both to the distance cut-off and to the physical window extent.
+  cell_diagonal <- sqrt(sum(rs ^ 2))
+  upper_bound_radius <- radius + cell_diagonal
+  nx <- 1 + 2 * ceiling(upper_bound_radius / rs[1])
+  ny <- 1 + 2 * ceiling(upper_bound_radius / rs[2])
+  row_offset <- seq_len(ny) - ceiling(ny / 2)
+  col_offset <- seq_len(nx) - ceiling(nx / 2)
+  included <- outer(
+    row_offset * rs[2],
+    col_offset * rs[1],
+    function(dy, dx) dx ^ 2 + dy ^ 2 <= upper_bound_radius ^ 2
+  )
+  ifelse(included, 1, NA_real_)
 }
 
 #' Identify the focal indices with the highest values
@@ -365,7 +365,7 @@ update_db <- function(hf_conc_new, db, cells) {
 check_input <- function(df, value, top_n, radius, cell_size, grid_precision) {
 
   if (!is.data.frame(df)) {
-    rlang::abort("`df` must be a data.frame.", call = NULL)
+    rlang::abort("`data` must be a data.frame.", call = NULL)
   }
 
   if (!is.character(value) || length(value) != 1L || is.na(value)) {
@@ -380,8 +380,10 @@ check_input <- function(df, value, top_n, radius, cell_size, grid_precision) {
 
   if (!is.numeric(top_n) || length(top_n) != 1L || is.na(top_n) ||
       !is.finite(top_n) || round(top_n) != top_n || top_n <= 0) {
-    msg <- paste0("Can't find the `top_n = ", top_n, "` highest concentrations")
-    error_msg <- paste0("`top_n = ", top_n, "` is not a positive integer.")
+    msg <- paste0("Can't find the `n_hotspots = ", top_n,
+                  "` highest concentrations")
+    error_msg <- paste0("`n_hotspots = ", top_n,
+                        "` is not a positive integer.")
     rlang::abort(c(msg, "x" = error_msg), call = NULL)
   }
 
@@ -403,9 +405,9 @@ check_input <- function(df, value, top_n, radius, cell_size, grid_precision) {
   if (!is.numeric(grid_precision) || length(grid_precision) != 1L ||
       is.na(grid_precision) || !is.finite(grid_precision) ||
       grid_precision <= 0) {
-    msg <- paste0("Can't find concentrations with `grid_precision = ",
+    msg <- paste0("Can't find concentrations with `grid_spacing = ",
                   grid_precision, "`.")
-    error_msg <- paste0("`grid_precision` is not a positive number.")
+    error_msg <- paste0("`grid_spacing` is not a positive number.")
     rlang::abort(c(msg, "x" = error_msg), call = NULL)
   }
 
@@ -417,12 +419,58 @@ check_input <- function(df, value, top_n, radius, cell_size, grid_precision) {
   }
 
   if (grid_precision > cell_size) {
-    msg <- paste0("Can't find concentrations with `grid_precision` > ",
+    msg <- paste0("Can't find concentrations with `grid_spacing` > ",
                   "`cell_size`.")
-    error_msg <- paste0("`grid_precision` = ", grid_precision,
+    error_msg <- paste0("`grid_spacing` = ", grid_precision,
                         " > `cell_size` = ", cell_size, ".")
     rlang::abort(c(msg, "x" = error_msg), call = NULL)
   }
+}
+
+resolve_hotspot_deprecated_args <- function(n_hotspots, top_n,
+                                            top_n_supplied,
+                                            grid_spacing, grid_precision,
+                                            grid_precision_supplied,
+                                            caller) {
+  if (isTRUE(top_n_supplied)) {
+    if (!same_argument_value(n_hotspots, 1) &&
+        !same_argument_value(n_hotspots, top_n)) {
+      rlang::abort(c(
+        "Conflicting hotspot-count arguments.",
+        "x" = "`n_hotspots` and deprecated `top_n` were supplied with different values.",
+        "i" = "Use `n_hotspots` only."
+      ), call = NULL)
+    }
+    lifecycle::deprecate_warn(
+      "0.8.1",
+      paste0(caller, "(top_n)"),
+      paste0(caller, "(n_hotspots)")
+    )
+    n_hotspots <- top_n
+  }
+
+  if (isTRUE(grid_precision_supplied)) {
+    if (!same_argument_value(grid_spacing, 1) &&
+        !same_argument_value(grid_spacing, grid_precision)) {
+      rlang::abort(c(
+        "Conflicting grid-spacing arguments.",
+        "x" = "`grid_spacing` and deprecated `grid_precision` were supplied with different values.",
+        "i" = "Use `grid_spacing` only."
+      ), call = NULL)
+    }
+    lifecycle::deprecate_warn(
+      "0.8.1",
+      paste0(caller, "(grid_precision)"),
+      paste0(caller, "(grid_spacing)")
+    )
+    grid_spacing <- grid_precision
+  }
+
+  list(n_hotspots = n_hotspots, grid_spacing = grid_spacing)
+}
+
+same_argument_value <- function(x, y) {
+  isTRUE(all.equal(x, y, check.attributes = FALSE))
 }
 
 

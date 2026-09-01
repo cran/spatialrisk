@@ -1,3 +1,51 @@
+# spatialrisk 0.8.2
+
+* Tightened automatic continuous screening with a point-to-cell distance bound.
+  Boundary points remain protected by numerical tolerances, without counting
+  entire neighbouring raster cells. Additional feasible trial centres improve
+  the lower bound. Both steps reuse the active portfolio and stored terra cell
+  assignments; the full geometric route and user-supplied thresholds are unchanged.
+
+* Accelerated the single-hotspot continuous refinement with a streaming Rcpp
+  angular sweep. Nearby pair intersections are processed once over the union
+  of the screened candidate regions, exact active-portfolio totals are updated
+  at angular events, and only competitive centres require a confirming indexed
+  radius query. Terra remains responsible for raster-cell assignment and safe
+  candidate-cell screening. Optional internal profiling is available through
+  `options(spatialrisk.profile = TRUE)` without changing the standard result.
+* Made the default continuous screening bounds geometrically consistent. The
+  focal window now spans the radius plus the full raster-cell diagonal, also
+  for non-square cells, and the automatic feasible lower bound is evaluated in
+  the same projected Euclidean coordinates as pair refinement. Added direct
+  tests of the upper bound, feasible lower bound, safe cell pruning, and an
+  optimum at a pair intersection near a raster-cell edge.
+* Expanded the screening raster in whole-cell steps to cover the portfolio
+  bounding box plus at least the search radius. This retains pair-intersection
+  centres that lie just outside the point extent while preserving the existing
+  raster alignment.
+* Increased the default `max_refinement_points` from 1,000 to 1,500. This
+  allows continuous pair-intersection refinement for moderately larger local
+  candidate sets while retaining grid fallback for denser searches.
+* Extended the decomposed hotspot workflow so
+  `optimize_hotspot(prepare_spatialrisk(...))` performs a full geometric
+  candidate search over the active portfolio, while optimisation after
+  `select_candidates()` uses the screened candidate search state. Candidate
+  generation and scoring are now explicitly separated: every candidate centre
+  is scored against the complete active portfolio. The high-level
+  `concentration_hotspot()` continues to use the screened continuous search
+  for normal use.
+* Reused the prepared terra raster-cell membership during continuous
+  refinement. Local candidate points are now retrieved from nearby raster
+  cells, and all candidate regions in one greedy step share a single Rcpp
+  evaluation index instead of rebuilding it for every focal candidate cell.
+  Point pairs shared by overlapping focal candidate regions are processed once
+  for a single hotspot and cached between overlapping regions in the sequential
+  multi-hotspot route. With non-negative values and the default automatic lower bound,
+  exact radius sums are now calculated only for observed or pair-intersection
+  centres whose own terra raster cell passed focal screening. Both centres from
+  a point pair are screened separately. This preserves full-portfolio scoring
+  while substantially reducing the number of exact candidate evaluations.
+
 # spatialrisk 0.8.1
 
 * Added a decomposed hotspot workflow with `prepare_spatialrisk()`,
@@ -10,11 +58,19 @@
   focal candidate cells above the lower bound, rather than only around the top
   focal cell. Candidate centres are now scored against the full remaining
   portfolio before the best hotspot is selected. This avoids cases where a
-  later `top_n` hotspot could have a higher concentration than the first
+  later `n_hotspots` hotspot could have a higher concentration than the first
   reported hotspot.
-* Added a regression test to check that continuous `top_n` hotspot
+* Improved `n_hotspots > 1` performance for the continuous hotspot method by
+  caching pair-intersection refinements per focal candidate cell. After each
+  greedy step, only cache entries affected by removed contributing points or
+  changed focal cells are recomputed.
+* Added a regression test to check that continuous `n_hotspots` hotspot
   concentrations are non-increasing after contributing points are removed
   between iterations.
+* `concentration_hotspot()` and `optimize_hotspot()` now prefer `n_hotspots`
+  instead of `top_n`, and `concentration_hotspot()` and `select_candidates()`
+  now prefer `grid_spacing` instead of `grid_precision`. The old argument names
+  remain temporarily supported with lifecycle deprecation warnings.
 
 # spatialrisk 0.8.0
 
@@ -57,8 +113,8 @@
 * Improved `radius_sum()` validation, output column handling, and C++ prefiltering
   of incomplete reference rows.
 * Updated `concentration_hotspot()` documentation to clarify that the function
-  uses a grid-based search with local refinement. The search precision is
-  controlled by `cell_size` and `grid_precision`.
+  uses a grid-based search with local refinement. The search resolution is
+  controlled by `cell_size` and `grid_spacing`.
 * `concentration_hotspot()` now uses `progress` instead of `print_progress`.
   Since this is a new public API, the old argument is not retained there; older
   deprecated functions still translate their legacy progress arguments.

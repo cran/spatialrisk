@@ -8,26 +8,33 @@ knitr::opts_chunk$set(
 ## ----message = FALSE, warning = FALSE-----------------------------------------
 library(spatialrisk)
 library(sf)
-library(dplyr)
 
-data(nl_gemeente)
+point_exposures <- insurance[, c("lon", "lat", "amount")]
 
-## -----------------------------------------------------------------------------
-set.seed(1)
-municipality_values <- nl_gemeente |>
-  st_drop_geometry() |>
-  select(id, code, areaname) |>
-  mutate(value = runif(n(), min = 0, max = 100))
+head(point_exposures)
 
 ## -----------------------------------------------------------------------------
-map_data <- nl_gemeente |>
-  left_join(municipality_values, by = c("id", "code", "areaname"))
+nl_gemeente[, c("id", "code", "areaname")]
+
+## ----message = FALSE----------------------------------------------------------
+municipality_exposure <- summarise_points_by_polygon(
+  polygons = nl_gemeente,
+  points = point_exposures,
+  value = "amount",
+  fun = sum,
+  outside = "ignore"
+)
+
+sf::st_drop_geometry(municipality_exposure)[
+  1:6,
+  c("areaname", "amount_sum")
+]
 
 ## ----eval = requireNamespace("tmap", quietly = TRUE)--------------------------
 choropleth(
-  map_data,
-  value = "value",
+  municipality_exposure,
+  value = "amount_sum",
   id = "areaname",
-  legend_title = "Value"
+  legend_title = "Total insured amount"
 )
 
