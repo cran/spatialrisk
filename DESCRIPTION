@@ -1,7 +1,7 @@
 Package: spatialrisk
 Type: Package
 Title: Spatial Concentration and Radius-Based Risk Calculations
-Version: 0.8.3
+Version: 0.8.4
 Authors@R: c(person("Martin", "Haringa", role = c("aut", "cre"), 
     email = "mtharinga@gmail.com"))
 Author: Martin Haringa [aut, cre]
@@ -33,6 +33,6 @@ Suggests: classInt, colourvalues, GenSA, geohashTools, ggplot2, knitr,
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.1.0
 NeedsCompilation: yes
-Packaged: 2026-09-29 12:09:17 UTC; martin
+Packaged: 2026-10-16 12:07:23 UTC; martin
 Repository: CRAN
-Date/Publication: 2026-09-30 19:50:02 UTC
+Date/Publication: 2026-10-16 13:10:02 UTC

@@ -1,3 +1,14 @@
+# spatialrisk 0.8.4
+
+* Interactive maps now use `Esri.WorldGrayCanvas` by default, with
+  `OpenStreetMap` and `Esri.WorldImagery` available in the basemap selector.
+  CARTO basemaps are no longer included by default because they now require
+  an API key (see [mapview issue #520](https://github.com/r-spatial/mapview/issues/520)).
+  Basemaps can be set through `basemaps` in mapview-based plots and
+  `choropleth()`, and `providers` in the legacy Leaflet plot methods.
+* Interactive `choropleth()` examples are now wrapped in `\dontrun{}` to
+  avoid opening interactive maps when running package examples.
+
 # spatialrisk 0.8.3
 
 * Grid hotspot refinement and continuous-to-grid fallback now generate and

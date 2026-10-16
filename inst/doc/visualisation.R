@@ -38,3 +38,7 @@ choropleth(
   legend_title = "Total insured amount"
 )
 
+## ----eval = FALSE-------------------------------------------------------------
+# choropleth(municipality_exposure, value = "amount_sum", mode = "view",
+#            basemaps = "Esri.WorldImagery")
+

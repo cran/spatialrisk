@@ -455,6 +455,16 @@ for polygon labels in interactive maps.</p>
 across municipalities. The function returns a <code>tmap</code> object,
 so the map can be further adjusted with <code>tmap</code> if a report
 requires additional formatting.</p>
+<p>Interactive maps use <code>Esri.WorldGrayCanvas</code> initially,
+with <code>OpenStreetMap</code> and <code>Esri.WorldImagery</code>
+available in the basemap selector. Set <code>basemaps</code> in
+<code>choropleth()</code> to choose a different background:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="fu">choropleth</span>(municipality_exposure, <span class="at">value =</span> <span class="st">&quot;amount_sum&quot;</span>, <span class="at">mode =</span> <span class="st">&quot;view&quot;</span>,</span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a>           <span class="at">basemaps =</span> <span class="st">&quot;Esri.WorldImagery&quot;</span>)</span></code></pre></div>
+<p>The same <code>basemaps</code> argument is available for
+<code>map_points()</code> and hotspot or workflow <code>plot()</code>
+methods, for example
+<code>map_points(point_exposures, basemaps = &quot;OpenStreetMap&quot;)</code>.</p>
 </div>
 <div id="interpreting-the-map" class="section level2">
 <h2>Interpreting the map</h2>
